@@ -47,6 +47,12 @@ ZARINPAL_ERROR_FA = {
 }
 
 
+# Bank Refah error codes -> Persian. Intentionally empty for now: the public
+# documentation does not list the bank's codes, so unmapped errors fall back
+# to the bank's own message. Add entries here once verified against a real
+# terminal's responses.
+REFAH_ERROR_FA = {}
+
 def flag_on(value):
     """Parse a config flag that may arrive as a string from a web form.
 
