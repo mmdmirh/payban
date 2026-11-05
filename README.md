@@ -8,6 +8,7 @@ Python clients for Iranian payment gateways with **actionable Persian error mess
 |---|---|---|
 | Zarinpal (v4) | REST | request / verify / connection test |
 | Mellat — Behpardakht (Shaparak) | SOAP | pay request / confirm (verify+settle) / connection test |
+| Bank Refah (Shaparak refipg) | REST | purchase (token) / confirm / connection test |
 
 ## Why
 
@@ -45,6 +46,31 @@ authority, startpay_url = zp.request_payment(
 # ... on callback (?Authority=..&Status=OK):
 ref_id = zp.verify(amount=1_000_000, authority=authority)   # idempotent (100/101)
 ```
+
+## Bank Refah
+
+```python
+from payban import RefahClient, ProxyConfig
+
+refah = RefahClient(
+    username="user", password="pass", terminal_number="12345678",
+    proxy=ProxyConfig(base_url="https://YOUR-IRAN-PROXY", secret="shared-secret"),
+)
+token, startpay_url = refah.purchase(
+    amount=1_000_000,                       # Rials
+    callback_url="https://shop.example/payment/refah/callback/",
+    order_id="1234",                        # must be numeric
+    mobile="0912xxxxxxx",
+)
+# redirect the customer to startpay_url; the bank returns the customer to the
+# callback with Token, RRN and status. Confirm only after checking them:
+rrn = refah.verify(amount=1_000_000, token=token, rrn=rrn_from_callback,
+                   status=status_from_callback)
+```
+
+The proxy must forward `/refipg/` to `pna.shaparak.ir`. The bank publishes no
+sandbox, so `test_connection()` sends a probe purchase (never charged; the
+unused token expires).
 
 ## Mellat (Behpardakht)
 
