@@ -247,3 +247,27 @@ def test_start_date_goes_out_as_an_iso_datetime():
         post.return_value = resp({'status': 200, 'data': 1})
         c.consume(NC, 6000, 3, '1', start_date='1403/01/01')
     assert post.call_args.kwargs['json']['startDate'] == '2024-03-20T23:59:59+03:30'
+
+
+def test_get_order_by_request_id():
+    c = BetaClient(**CREDS)
+    c.cache.set(c._token_cache_key(), 'T', 100)
+    data = {'id': 22401, 'title': 't', 'customerNationalCode': NC, 'amount': 6000,
+            'description': 'd', 'projectType': 1}
+    with mock.patch('payban.beta.requests.get', return_value=resp({'status': 200, 'data': data})) as get:
+        out = c.get_order('4411')
+    assert get.call_args.args[0] == 'https://api.rb24.ir/beta/1.0/order/4411'
+    assert out['id'] == 22401 and out['national_code'] == NC and out['amount'] == 6000
+    with mock.patch('payban.beta.requests.get', return_value=resp({'status': 200, 'data': None})):
+        assert c.get_order('4411') is None
+
+
+def test_deletes_use_the_documented_http_verb():
+    c = BetaClient(**CREDS)
+    c.cache.set(c._token_cache_key(), 'T', 100)
+    with mock.patch('payban.beta.requests.delete', return_value=resp({'status': 200})) as d:
+        c.delete_order(5)
+        c.delete_installment(5, 2)
+    assert [x.args[0] for x in d.call_args_list] == [
+        'https://api.rb24.ir/beta/1.0/order/5/delete',
+        'https://api.rb24.ir/beta/1.0/order/5/installments/2/delete']

@@ -65,9 +65,13 @@ STATUS_MESSAGES = {
     4452: 'اعتبارسنجی شما انجام نشده یا نیاز به اعتبارسنجی مجدد دارد.',
     4453: 'در حال حاضر اعتباری برای شما ثبت نشده است.',
     4455: 'شما در طرح دیگری عضو هستید و تا پایان آن امکان استفاده از این طرح را ندارید.',
+    4410: 'اطلاعات مبلغ نادرست است.',
     4461: 'مبلغ درخواستی از اعتبار شما بیشتر است.',
     4462: 'تعداد اقساط نمی‌تواند بیشتر از ۳۶ ماه باشد.',
     4463: 'در هر ماه حداکثر ۸ خرید اقساطی از این فروشگاه امکان‌پذیر است.',
+    4464: 'به دلیل پرداخت رکوردهای اقساط، امکان حذف این فروش وجود ندارد.',
+    4465: 'به دلیل پرداخت رکورد قسط، امکان حذف وجود ندارد.',
+    4466: 'به دلیل پرداخت رکورد قسط، امکان ویرایش وجود ندارد.',
     4470: 'سرویس اقساطی برای این فروشگاه فعال نشده است.',
     4471: 'اطلاعات پذیرنده یافت نشد.',
     4473: 'پذیرنده غیرفعال است.',
@@ -271,6 +275,10 @@ class BetaClient:
             if method == 'GET':
                 response = requests.get(url, headers=headers, timeout=self.timeout,
                                         verify=self._verify())
+            elif method in ('DELETE', 'PUT'):
+                send = requests.delete if method == 'DELETE' else requests.put
+                response = send(url, json=json_body or {}, headers=headers,
+                                timeout=self.timeout, verify=self._verify())
             else:
                 response = requests.post(url, json=json_body or {}, headers=headers,
                                          timeout=self.timeout, verify=self._verify())
@@ -452,6 +460,36 @@ class BetaClient:
         body = self._post(f'/beta/1.0/order/{ym}/all', method='GET')
         return _rows(body.get('data'))
 
+    def get_order(self, request_id):
+        """استعلام فروش بر اساس شناسه یکتا — look a sale up by the ``requestId``
+        sent to :meth:`consume`. This is the safe way to find out whether a
+        consume that timed out registered. The docs describe ``requestId`` as a
+        number. Returns ``{'id', 'title', 'amount', 'national_code',
+        'description', 'project_type', 'raw'}`` (amount in Rials), or ``None`` when
+        the bank has no such sale."""
+        rid = _digits(request_id)
+        if self.mock_mode:
+            return None
+        self._require_config('apikey', 'terminal_name')
+        body = self._post(f'/beta/1.0/order/{rid}', method='GET')
+        data = body.get('data')
+        if not isinstance(data, dict) or not data:
+            return None
+        v = {str(k).lower(): val for k, val in data.items()}
+        try:
+            amount = int(v.get('amount') or 0)
+        except (TypeError, ValueError):
+            amount = 0
+        return {
+            'id': v.get('id'),
+            'title': str(v.get('title') or ''),
+            'amount': amount,
+            'national_code': str(v.get('customernationalcode') or ''),
+            'description': str(v.get('description') or ''),
+            'project_type': v.get('projecttype'),
+            'raw': data,
+        }
+
     def get_installments(self, order_id):
         """اقساط یک فروش, normalised to
         ``[{'row_number', 'due_date', 'due_date_g', 'amount', 'status', 'raw'}]``."""
@@ -511,14 +549,15 @@ class BetaClient:
             self.cache.delete(self._mock_sale_key(str(order_id)))
             return {'ok': True}
         self._require_config('apikey', 'terminal_name')
-        self._post(f'/beta/1.0/order/{order_id}/delete', json_body={})
+        self._post(f'/beta/1.0/order/{order_id}/delete', json_body={}, method='DELETE')
         return {'ok': True}
 
     def delete_installment(self, order_id, installment_id):
         if self.mock_mode:
             return {'ok': True}
         self._require_config('apikey', 'terminal_name')
-        self._post(f'/beta/1.0/order/{order_id}/installments/{installment_id}/delete', json_body={})
+        self._post(f'/beta/1.0/order/{order_id}/installments/{installment_id}/delete',
+                   json_body={}, method='DELETE')
         return {'ok': True}
 
     def validate_date(self):
