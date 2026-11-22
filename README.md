@@ -9,6 +9,7 @@ Python clients for Iranian payment gateways with **actionable Persian error mess
 | Zarinpal (v4) | REST | request / verify / connection test |
 | Mellat — Behpardakht (Shaparak) | SOAP | pay request / confirm (verify+settle) / connection test |
 | Bank Refah (Shaparak refipg) | REST | purchase (token) / confirm / connection test |
+| Bank Refah Beta (بتا, BNPL) | REST | credit inquiry / OTP request / consume / installments / connection test |
 
 ## Why
 
@@ -71,6 +72,33 @@ rrn = refah.verify(amount=1_000_000, token=token, rrn=rrn_from_callback,
 The proxy must forward `/refipg/` to `pna.shaparak.ir`. The bank publishes no
 sandbox, so `test_connection()` sends a probe purchase (never charged; the
 unused token expires).
+
+## Bank Refah Beta (بتا — buy now, pay later)
+
+```python
+from payban import BetaClient, BetaError, ProxyConfig
+
+beta = BetaClient(
+    client_id="myapp", client_secret="...", apikey="...", terminal_name="myapp",
+    proxy=ProxyConfig(base_url="https://YOUR-IRAN-PROXY", secret="shared-secret",
+                      secret_header="X-Proxy-Auth"),
+)
+try:
+    beta.inquiry("0012345678")                           # monthly repayment capacity
+    beta.request_otp("0012345678", amount=50_000_000, months=6)   # SMS OTP, valid 2 min
+    sale = beta.consume("0012345678", amount=50_000_000, months=6, otp="12345")
+    rows = beta.get_installments(sale["sale_id"])
+except BetaError as e:
+    print(e.kind, e.status, e.message)   # kind: enrolment / merchant / input
+```
+
+Amounts are in **Rials**. The token is cached (pass `cache=` with
+`get/set/delete` — a Django cache works — or use the in-memory default).
+`BetaError` is a `GatewayError` with a Persian `message`; show
+`MERCHANT_PUBLIC_MESSAGE` instead when `kind == "merchant"`. `mock_mode=True`
+runs the whole flow in-process (OTP is `11111`; the last digit of the national
+code scripts failures `0`→4450 … `3`→4453). Which endpoints work depends on the
+scopes the bank granted your app.
 
 ## Mellat (Behpardakht)
 
