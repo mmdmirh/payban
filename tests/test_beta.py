@@ -207,3 +207,43 @@ def test_test_connection_stages():
     assert r['ok'] is False and r['stage'] == 'inquiry'
     with mock.patch('payban.beta.requests.get', return_value=resp({'status': 200, 'data': True})):
         assert c.test_connection()['ok'] is True
+
+
+# --- real response shapes (as read by other implementations of this API) ------
+
+def test_installments_are_read_from_the_nested_data_list():
+    c = BetaClient(**CREDS)
+    c.cache.set(c._token_cache_key(), 'T', 100)
+    payload = {'status': 200, 'data': {'totalRecords': 2, 'data': [
+        {'Id': 11, 'Amount': 500, 'OverdueDate': '2026-12-21T00:00:00', 'IsSetteled': False,
+         'IsDeleted': False, 'Status': 0, 'StatusTitle': 'Created', 'OrderId': 9},
+        {'id': 12, 'amount': 500, 'overdueDate': '1405/10/30', 'isSetteled': True,
+         'isDeleted': True, 'statusTitle': 'Success'},
+    ]}}
+    with mock.patch('payban.beta.requests.get', return_value=resp(payload)):
+        rows = c.get_installments(9)
+    assert [r['id'] for r in rows] == [11, 12]
+    assert rows[0]['due_date_g'].isoformat() == '2026-12-21'
+    assert rows[1]['due_date_g'] is not None
+    assert rows[0]['amount'] == 500 and rows[0]['status'] == 'Created'
+    assert rows[1]['settled'] is True and rows[1]['deleted'] is True
+
+
+def test_order_list_is_read_from_the_nested_data_list():
+    c = BetaClient(**CREDS)
+    c.cache.set(c._token_cache_key(), 'T', 100)
+    payload = {'status': 200, 'data': {'totalRecords': 1, 'data': [{'id': 7, 'title': 'x'}]}}
+    with mock.patch('payban.beta.requests.get', return_value=resp(payload)):
+        assert c.list_orders('140509') == [{'id': 7, 'title': 'x'}]
+
+
+def test_start_date_goes_out_as_an_iso_datetime():
+    from payban.beta import wire_start_date
+    assert wire_start_date('1403/01/01') == '2024-03-20T23:59:59+03:30'
+    assert wire_start_date('2026-12-21T10:00:00') == '2026-12-21T10:00:00'
+    c = BetaClient(**CREDS)
+    c.cache.set(c._token_cache_key(), 'T', 100)
+    with mock.patch('payban.beta.requests.post') as post:
+        post.return_value = resp({'status': 200, 'data': 1})
+        c.consume(NC, 6000, 3, '1', start_date='1403/01/01')
+    assert post.call_args.kwargs['json']['startDate'] == '2024-03-20T23:59:59+03:30'

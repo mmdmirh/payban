@@ -154,6 +154,29 @@ def year_month_of(start_date):
     return f'{y:04d}{m:02d}'
 
 
+def wire_start_date(start_date):
+    """The bank's ``startDate`` is a datetime. Accepts the Jalali 'YYYY/MM/DD'
+    this library uses internally (or an ISO datetime, passed through) and returns
+    an ISO-8601 datetime at the end of that Gregorian day in Iran time — the
+    shape the bank is known to accept — so the bank's date-only reading never
+    slips a day."""
+    text = str(start_date or '')
+    if 'T' in text:
+        return text
+    day = _jalali_to_date(text)
+    if day is None:
+        return text
+    return f'{day.isoformat()}T23:59:59+03:30'
+
+
+def _rows(data):
+    """List endpoints answer ``data = {totalRecords, data: [...]}`` (a bare list
+    is accepted too)."""
+    if isinstance(data, dict):
+        data = data.get('data')
+    return data if isinstance(data, list) else []
+
+
 class MemoryCache:
     """Tiny in-process TTL cache; the default for tokens and mock state."""
 
@@ -387,7 +410,7 @@ class BetaClient:
         self._require_config('apikey', 'terminal_name')
         self._post(f'/beta/1.0/credit/{code}/request', json_body={
             'title': title or self.sale_title,
-            'startDate': start,
+            'startDate': wire_start_date(start),
             'amount': amount,
             'numberOfInstallments': months,
             'startDateYearMonth': year_month_of(start),
@@ -409,7 +432,7 @@ class BetaClient:
         self._require_config('apikey', 'terminal_name')
         body = self._post(f'/beta/1.0/credit/{code}/consume', json_body={
             'title': title or self.sale_title,
-            'startDate': start,
+            'startDate': wire_start_date(start),
             'amount': amount,
             'numberOfInstallments': months,
             'otp': str(otp or ''),
@@ -427,8 +450,7 @@ class BetaClient:
             return self._mock_list_orders(ym)
         self._require_config('apikey', 'terminal_name')
         body = self._post(f'/beta/1.0/order/{ym}/all', method='GET')
-        data = body.get('data')
-        return data if isinstance(data, list) else []
+        return _rows(body.get('data'))
 
     def get_installments(self, order_id):
         """اقساط یک فروش, normalised to
@@ -437,30 +459,50 @@ class BetaClient:
             return self._mock_installments(str(order_id))
         self._require_config('apikey', 'terminal_name')
         body = self._post(f'/beta/1.0/order/{order_id}/installments', method='GET')
-        data = body.get('data')
-        rows = data if isinstance(data, list) else []
+        rows = _rows(body.get('data'))
         return [self._normalise_installment(row, index) for index, row in enumerate(rows, start=1)]
 
     @staticmethod
     def _normalise_installment(row, index):
+        """Bank row (``Id, Amount, OverdueDate, SettelDate, IsSetteled, OrderId,
+        Status, StatusTitle, IsDeleted``; key case varies) -> a stable shape."""
         if not isinstance(row, dict):
-            return {'row_number': index, 'due_date': '', 'due_date_g': None,
-                    'amount': 0, 'status': '', 'raw': row}
-        due = row.get('dueDate') or row.get('date') or row.get('payDate') or ''
+            return {'row_number': index, 'id': None, 'due_date': '', 'due_date_g': None,
+                    'amount': 0, 'status': '', 'settled': False, 'deleted': False,
+                    'raw': row}
+        v = {str(k).lower(): val for k, val in row.items()}
+        due = v.get('overduedate') or v.get('duedate') or v.get('date') or v.get('paydate') or ''
         try:
-            amount = int(row.get('amount') or row.get('Amount') or 0)
+            amount = int(v.get('amount') or 0)
         except (TypeError, ValueError):
             amount = 0
         try:
-            row_number = int(row.get('rowNumber') or row.get('row') or index)
+            row_number = int(v.get('rownumber') or v.get('row') or index)
         except (TypeError, ValueError):
             row_number = index
+        due_text = str(due)
+        due_date = None
+        if due_text:
+            head = due_text.split('T')[0].replace('-', '/')
+            # Gregorian ISO ('2026-12-21T...') or Jalali ('1405/09/30').
+            digits = ''.join(ch for ch in head if ch.isdigit())
+            if len(digits) == 8 and int(digits[:4]) > 1700:
+                from datetime import date as _date
+                try:
+                    due_date = _date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+                except ValueError:
+                    due_date = None
+            else:
+                due_date = _jalali_to_date(head)
         return {
             'row_number': row_number,
-            'due_date': str(due),
-            'due_date_g': _jalali_to_date(due),
+            'id': v.get('id'),
+            'due_date': due_text,
+            'due_date_g': due_date,
             'amount': amount,
-            'status': str(row.get('status') or row.get('state') or ''),
+            'status': str(v.get('statustitle') or v.get('status') or v.get('state') or ''),
+            'settled': bool(v.get('issetteled') or v.get('issettled')),
+            'deleted': bool(v.get('isdeleted')),
             'raw': row,
         }
 
@@ -644,10 +686,13 @@ def build_installment_schedule(amount, months, start_date=None):
         due = format_jalali(y, m, d)
         rows.append({
             'row_number': index,
+            'id': None,
             'due_date': due,
             'due_date_g': _jalali_to_date(due),
             'amount': base + (remainder if index == 1 else 0),
             'status': 'pending',
+            'settled': False,
+            'deleted': False,
             'raw': {'mock': True},
         })
     return rows
